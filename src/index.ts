@@ -17,7 +17,7 @@ if (!BEEBOLE_API_TOKEN) {
 }
 
 const beebole = new BeeboleClient(BEEBOLE_API_TOKEN || "");
-const server = new Server({ name: "mcp-beebole", version: "1.0.0" }, { capabilities: { tools: {} } });
+const server = new Server({ name: "mcp-beebole", version: "2.0.0" }, { capabilities: { tools: {} } });
 
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   return {
