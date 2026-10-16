@@ -32,19 +32,32 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: { type: "object", properties: {} },
       },
       {
-        name: "create_time_entry",
-        description: "Create or update a time entry in Beebole. You MUST provide either project_id OR absence_id, but NOT both.",
+        name: "set_time_entry",
+        description: "Set the TOTAL hours of one timesheet row on one date (overwrites, does not add). Updates the existing entry for that row/date or creates it. Provide exactly one of subproject_id, project_id or absence_id; use the IDs and levels shown by list_my_projects (📄 = subproject, 📁 = project).",
         inputSchema: {
           type: "object",
           properties: {
             date: { type: "string", description: "Date (YYYY-MM-DD)" },
-            project_id: { type: "string", description: "ID of the project/subproject/company (Mutually exclusive with absence_id)" },
-            task_id: { type: "string", description: "Optional ID of the task (Only used with project_id)" },
-            absence_id: { type: "string", description: "ID of the absence type (Mutually exclusive with project_id)" },
-            hours: { type: "number", description: "Number of hours" },
+            subproject_id: { type: "string", description: "ID of a subproject (📄)" },
+            project_id: { type: "string", description: "ID of a project (📁), only for rows logged directly on a project" },
+            absence_id: { type: "string", description: "ID of the absence type" },
+            task_id: { type: "string", description: "Optional task ID (not with absence_id)" },
+            hours: { type: "number", description: "Total hours for this row on this date" },
             comment: { type: "string", description: "Optional comment" },
           },
           required: ["date", "hours"],
+        },
+      },
+      {
+        name: "delete_time_entry",
+        description: "Delete a single time entry by ID (from get_time_entries) and its date.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            id: { type: "string", description: "Time entry ID" },
+            date: { type: "string", description: "Date of the entry (YYYY-MM-DD)" },
+          },
+          required: ["id", "date"],
         },
       },
       {
@@ -157,23 +170,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return { content: [{ type: "text", text }] };
     }
 
-    if (name === "create_time_entry") {
-      const schema = z.object({
+    if (name === "set_time_entry") {
+      const entry = z.object({
         date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        subproject_id: z.string().optional(),
         project_id: z.string().optional(),
-        task_id: z.string().optional(),
         absence_id: z.string().optional(),
-        hours: z.number(),
+        task_id: z.string().optional(),
+        hours: z.number().min(0).max(24),
         comment: z.string().optional(),
-      }).refine(data => {
-        const hasProject = !!data.project_id;
-        const hasAbsence = !!data.absence_id;
-        return (hasProject || hasAbsence) && !(hasProject && hasAbsence);
-      }, { message: "Provide exactly one of project_id or absence_id, but not both" });
+      }).refine(d => [d.subproject_id, d.project_id, d.absence_id].filter(Boolean).length === 1, {
+        message: "Provide exactly one of subproject_id, project_id or absence_id",
+      }).refine(d => !(d.absence_id && d.task_id), { message: "task_id cannot be used with absence_id" }).parse(args);
 
-      const entry = schema.parse(args);
-      const result = await beebole.createTimeEntry(entry);
-      const entryData = result.timeEntry || result;
+      const result = await beebole.setTimeEntry(entry);
+      const entryData = result.time_entry || result.timeEntry || {};
       const statusMap: Record<string, string> = {
         'd': 'Draft',
         'n': 'Not Submitted',
@@ -181,9 +192,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         'a': 'Approved',
         'r': 'Rejected'
       };
-      const entryStatus = statusMap[entryData.status] || entryData.status || 'ok';
-      
-      return { content: [{ type: "text", text: `Successfully processed time entry for ${entry.date} (${entry.hours}h). Current entry status: ${entryStatus}.` }] };
+      const entryStatus = statusMap[entryData.status] || entryData.status || 'unknown';
+
+      return { content: [{ type: "text", text: `Time entry ${result.action} for ${entry.date}: ${entry.hours}h (id ${entryData.id ?? "?"}, status: ${entryStatus}).` }] };
+    }
+
+    if (name === "delete_time_entry") {
+      const params = z.object({
+        id: z.string().min(1),
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      }).parse(args);
+      await beebole.deleteTimeEntry(params.id, params.date);
+      return { content: [{ type: "text", text: `Deleted time entry ${params.id} on ${params.date}.` }] };
     }
 
     if (name === "get_time_entries") {
@@ -244,7 +264,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           if (detail) ctx += (ctx ? " " : "") + detail;
         }
 
-        text += `- ${e.date}: ${hours}h on ${ctx || "Unknown"}${e.comment ? ` - ${e.comment}` : ""}\n`;
+        text += `- [${e.id}] ${e.date}: ${hours}h on ${ctx || "Unknown"}${e.comment ? ` - ${e.comment}` : ""}\n`;
       });
       return { content: [{ type: "text", text }] };
     }

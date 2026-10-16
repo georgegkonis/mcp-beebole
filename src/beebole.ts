@@ -1,14 +1,16 @@
 import axios, { AxiosInstance } from "axios";
 
 export interface BeeboleTimeEntry {
-  id?: string;
   date: string;
   project_id?: string;
+  subproject_id?: string;
   task_id?: string;
   absence_id?: string;
   hours: number;
   comment?: string;
 }
+
+const idOf = (ref: any): string | null => (ref?.id != null ? String(ref.id) : null);
 
 export class BeeboleClient {
   private client: AxiosInstance;
@@ -27,29 +29,18 @@ export class BeeboleClient {
   }
 
   private async callService<T>(service: string, params: any = {}): Promise<T> {
-    const payloads = [{ service, ...params }, { service, parameters: params }];
-    let lastError: Error | null = null;
-
-    for (const payload of payloads) {
-      try {
-        const response = await this.client.post("", payload);
-        if (response.data.status === "ok") return response.data;
-        
-        // Beebole sometimes returns 200 OK but with status: "error" in the body
-        if (response.data.status === "error") {
-          const msg = response.data.error?.message || response.data.message || "Unknown Beebole API error";
-          throw new Error(msg);
-        }
-      } catch (error: any) {
-        lastError = error;
-        // If it's a 401 or 403, no need to retry with second payload
-        if (error.response?.status === 401 || error.response?.status === 403) break;
-      }
+    let data: any;
+    try {
+      data = (await this.client.post("", { service, ...params })).data;
+    } catch (error: any) {
+      const msg = error.response?.data?.message || error.message || "Request failed";
+      throw new Error(`Beebole API call failed (${service}): ${msg}`);
     }
-
-    const errorDetails = lastError instanceof Error ? lastError.message : "Service failed";
-    console.error(`[Beebole API Error] Service: ${service}, Details: ${errorDetails}`);
-    throw new Error(`Beebole API call failed: ${errorDetails}`);
+    if (data?.status !== "ok") {
+      const msg = data?.error?.message || data?.message || "Unknown Beebole API error";
+      throw new Error(`Beebole API call failed (${service}): ${msg}`);
+    }
+    return data;
   }
 
   private normalize(items: any[]): any[] {
@@ -71,10 +62,8 @@ export class BeeboleClient {
     let allProjects: any[] = [];
     if (companyIds && companyIds.length > 0) {
       for (const id of companyIds) {
-        try {
-          const data = await this.callService<any>("project.list", { company: { id: Number(id) } });
-          allProjects.push(...this.normalize(data.projects || data.results || []));
-        } catch (e) {}
+        const data = await this.callService<any>("project.list", { company: { id: Number(id) } });
+        allProjects.push(...this.normalize(data.projects || data.results || []));
       }
     }
     return allProjects.filter(p => p.active !== false);
@@ -84,30 +73,24 @@ export class BeeboleClient {
     let allSubprojects: any[] = [];
     if (projectIds && projectIds.length > 0) {
       for (const id of projectIds) {
-        try {
-          const data = await this.callService<any>("subproject.list", { project: { id: Number(id) } });
-          allSubprojects.push(...this.normalize(data.subprojects || data.results || []));
-        } catch (e) {}
+        const data = await this.callService<any>("subproject.list", { project: { id: Number(id) } });
+        allSubprojects.push(...this.normalize(data.subprojects || data.results || []));
       }
     }
     return allSubprojects.filter(s => s.active !== false);
   }
 
   async listTasks(): Promise<any[]> {
-    try {
-      const data = await this.callService<any>("task.list");
-      return this.normalize(data.tasks || data.results || []).filter(t => t.active !== false);
-    } catch (error) { return []; }
+    const data = await this.callService<any>("task.list");
+    return this.normalize(data.tasks || data.results || []).filter(t => t.active !== false);
   }
 
   async listAbsenceTypes(companyIds?: string[]): Promise<any[]> {
     let allAbsences: any[] = [];
     if (companyIds && companyIds.length > 0) {
       for (const id of companyIds) {
-        try {
-          const data = await this.callService<any>("absence.list", { company: { id: Number(id) } });
-          allAbsences.push(...this.normalize(data.absences || data.results || []));
-        } catch (e) {}
+        const data = await this.callService<any>("absence.list", { company: { id: Number(id) } });
+        allAbsences.push(...this.normalize(data.absences || data.results || []));
       }
     }
     return allAbsences.filter(a => a.active !== false);
@@ -118,50 +101,44 @@ export class BeeboleClient {
     return data.timeEntries || data.results || data.time_entries || [];
   }
 
-  async createTimeEntry(entry: BeeboleTimeEntry): Promise<any> {
-    const existingEntries = await this.getTimeEntries(entry.date, entry.date);
-    
-    const existingEntry = existingEntries.find(e => {
-      if (entry.absence_id) {
-        return String(e.absence?.id) === String(entry.absence_id);
-      }
-      const target_id = String(entry.project_id);
-      const matchProject = String(e.subproject?.id) === target_id || String(e.project?.id) === target_id || String(e.company?.id) === target_id;
-      if (matchProject) {
-        const e_task_id = e.task?.id ? String(e.task.id) : null;
-        const target_task_id = entry.task_id ? String(entry.task_id) : null;
-        return !target_task_id || (e_task_id === target_task_id);
-      }
-      return false;
+  /**
+   * Sets the total hours of one timesheet row on one date: updates the matching
+   * entry if one exists, otherwise creates it. Exactly one of subproject_id,
+   * project_id or absence_id must be given.
+   */
+  async setTimeEntry(entry: BeeboleTimeEntry): Promise<any> {
+    const targets = [entry.subproject_id, entry.project_id, entry.absence_id].filter(Boolean);
+    if (targets.length !== 1) {
+      throw new Error("Provide exactly one of subproject_id, project_id or absence_id");
+    }
+    const taskId = entry.task_id ? String(entry.task_id) : null;
+
+    const existing = (await this.getTimeEntries(entry.date, entry.date)).filter(e => {
+      if (e.date && e.date !== entry.date) return false;
+      if (entry.absence_id) return idOf(e.absence) === String(entry.absence_id);
+      if (idOf(e.absence) || idOf(e.task) !== taskId) return false;
+      if (entry.subproject_id) return idOf(e.subproject) === String(entry.subproject_id);
+      return !idOf(e.subproject) && idOf(e.project) === String(entry.project_id);
     });
-
-    const isUpdate = !!existingEntry;
-    const service = isUpdate ? "time_entry.update" : "time_entry.create";
-    
-    const payload: any = { service, date: entry.date, hours: entry.hours, comment: entry.comment };
-    if (isUpdate) payload.id = existingEntry.id;
-
-    if (entry.absence_id) {
-      payload.absence = { id: Number(entry.absence_id) };
-    } else {
-      const companies = await this.listCompanies();
-      const projects = await this.listProjects(companies.map(c => c.id));
-      const isProject = projects.some(p => String(p.id) === String(entry.project_id));
-      if (isProject) payload.project = { id: Number(entry.project_id) };
-      else payload.subproject = { id: Number(entry.project_id) };
-      if (entry.task_id) payload.task = { id: Number(entry.task_id) };
+    if (existing.length > 1) {
+      throw new Error(
+        `Ambiguous: ${existing.length} entries match this row on ${entry.date} (ids ${existing.map(e => e.id).join(", ")}). Delete the extras first.`
+      );
     }
 
-    try {
-      const data = await this.callService<any>(service, payload);
-      return data;
-    } catch (e) {
-      if (!entry.absence_id) {
-        const retryPayload = { ...payload, company: { id: Number(entry.project_id) } };
-        delete retryPayload.subproject; delete retryPayload.project;
-        return this.callService<any>(service, retryPayload);
-      }
-      throw e;
-    }
+    const payload: any = { date: entry.date, hours: entry.hours };
+    if (entry.comment !== undefined) payload.comment = entry.comment;
+    if (existing.length === 1) payload.id = existing[0].id;
+    if (entry.absence_id) payload.absence = { id: Number(entry.absence_id) };
+    else if (entry.subproject_id) payload.subproject = { id: Number(entry.subproject_id) };
+    else payload.project = { id: Number(entry.project_id) };
+    if (taskId) payload.task = { id: Number(taskId) };
+
+    const data = await this.callService<any>(existing.length === 1 ? "time_entry.update" : "time_entry.create", payload);
+    return { ...data, action: existing.length === 1 ? "updated" : "created" };
+  }
+
+  async deleteTimeEntry(id: string, date: string): Promise<any> {
+    return this.callService<any>("time_entry.delete", { id: Number(id), date });
   }
 }

@@ -88,7 +88,7 @@ Here are some ways you can interact with Beebole through your AI assistant:
 **Prompt:** "Log 7.5 hours on the 'Development' project for today with the comment 'Working on the MCP server'."  
 **Assistant Action:** 
 1. Calls `list_my_projects` to find the ID for "Development".
-2. Calls `create_time_entry` with today's date, the resolved project ID, `7.5` hours, and the provided comment.  
+2. Calls `set_time_entry` with today's date, the resolved subproject ID, `7.5` hours, and the provided comment.  
 **Result:** Confirmation that the entry was created or updated in Beebole.
 
 ### 3. Checking your timesheet
@@ -102,18 +102,22 @@ Here are some ways you can interact with Beebole through your AI assistant:
 
 1.  **`list_my_projects`**
     - Description: Returns a list of the user's active projects and tasks.
-2.  **`create_time_entry`**
+2.  **`set_time_entry`**
     - Parameters:
         - `date`: Date (format `YYYY-MM-DD`).
-        - `project_id`: ID of the project or task.
-        - `hours`: Number of hours (numeric).
+        - exactly one of `subproject_id`, `project_id` or `absence_id`.
+        - `task_id`: (Optional) Task ID.
+        - `hours`: Total hours for that row on that date.
         - `comment`: (Optional) Comment.
-    - Description: Creates a new time entry.
-3.  **`get_time_entries`**
+    - Description: Sets the total hours of one timesheet row on one date. Updates the existing entry for that row, or creates it; it never adds to existing hours.
+3.  **`delete_time_entry`**
+    - Parameters: `id`, `date` (`YYYY-MM-DD`).
+    - Description: Deletes one time entry.
+4.  **`get_time_entries`**
     - Parameters:
         - `start_date`: Start date (`YYYY-MM-DD`).
         - `end_date`: End date (`YYYY-MM-DD`).
-    - Description: Lists existing time entries for the given period.
+    - Description: Lists existing time entries (with their IDs) for the given period.
 
 ## Testing
 The project uses `vitest` for unit tests:

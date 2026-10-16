@@ -40,40 +40,71 @@ describe('BeeboleClient', () => {
     expect(companies[0].name).toBe('Company A');
   });
 
-  it('should create a time entry (new)', async () => {
-    const result = await client.createTimeEntry({
-      date: '2026-04-07',
-      project_id: '101',
-      hours: 8,
-      comment: 'Testing'
-    });
+  it('creates a subproject entry when none exists', async () => {
+    const result = await client.setTimeEntry({ date: '2026-04-07', subproject_id: '201', hours: 8, comment: 'Testing' });
 
-    expect(result.timeEntry.id).toBe(999);
+    expect(result.action).toBe('created');
+    expect(mockedAxios.post).toHaveBeenCalledWith('', expect.objectContaining({
+      service: 'time_entry.create', subproject: { id: 201 }, hours: 8,
+    }));
   });
 
-  it('should update an existing time entry', async () => {
-    // Override list to return one entry
-    mockedAxios.post.mockImplementation(async (url: string, payload: any) => {
+  it('updates the entry for the same row instead of adding', async () => {
+    mockedAxios.post.mockImplementation(async (_url: string, payload: any) => {
       if (payload.service === 'time_entry.list') {
-        return { data: { status: 'ok', results: [{ id: 999, date: '2026-04-07', project: { id: 101 } }] } };
+        return { data: { status: 'ok', results: [
+          { id: 998, date: '2026-04-07', subproject: { id: 202 } },
+          { id: 999, date: '2026-04-07', subproject: { id: 201 } },
+        ] } };
       }
-      if (payload.service === 'time_entry.update') {
-        return { data: { status: 'ok', timeEntry: { id: 999, status: 's' } } };
+      return { data: { status: 'ok', time_entry: { id: 999, status: 'd' } } };
+    });
+
+    const result = await client.setTimeEntry({ date: '2026-04-07', subproject_id: '201', hours: 4 });
+
+    expect(result.action).toBe('updated');
+    expect(mockedAxios.post).toHaveBeenCalledWith('', expect.objectContaining({ service: 'time_entry.update', id: 999, hours: 4 }));
+  });
+
+  it('does not match an entry on the same subproject with a different task', async () => {
+    mockedAxios.post.mockImplementation(async (_url: string, payload: any) => {
+      if (payload.service === 'time_entry.list') {
+        return { data: { status: 'ok', results: [{ id: 999, date: '2026-04-07', subproject: { id: 201 }, task: { id: 5 } }] } };
       }
       return { data: { status: 'ok' } };
     });
 
-    const result = await client.createTimeEntry({
-      date: '2026-04-07',
-      project_id: '101',
-      hours: 4
+    const result = await client.setTimeEntry({ date: '2026-04-07', subproject_id: '201', hours: 2 });
+
+    expect(result.action).toBe('created');
+  });
+
+  it('refuses ambiguous matches', async () => {
+    mockedAxios.post.mockImplementation(async (_url: string, payload: any) => {
+      if (payload.service === 'time_entry.list') {
+        return { data: { status: 'ok', results: [
+          { id: 1, date: '2026-04-07', subproject: { id: 201 } },
+          { id: 2, date: '2026-04-07', subproject: { id: 201 } },
+        ] } };
+      }
+      return { data: { status: 'ok' } };
     });
 
-    expect(result.timeEntry.id).toBe(999);
-    expect(mockedAxios.post).toHaveBeenCalledWith('', expect.objectContaining({
-      service: 'time_entry.update',
-      id: 999
-    }));
+    await expect(client.setTimeEntry({ date: '2026-04-07', subproject_id: '201', hours: 2 })).rejects.toThrow('Ambiguous');
+    expect(mockedAxios.post).not.toHaveBeenCalledWith('', expect.objectContaining({ service: 'time_entry.create' }));
+  });
+
+  it('requires exactly one target', async () => {
+    await expect(client.setTimeEntry({ date: '2026-04-07', subproject_id: '1', absence_id: '2', hours: 1 })).rejects.toThrow('exactly one');
+  });
+
+  it('propagates list errors instead of returning empty results', async () => {
+    mockedAxios.post.mockImplementation(async (_url: string, payload: any) => {
+      if (payload.service === 'project.list') return { data: { status: 'error', message: 'Forbidden' } };
+      return { data: { status: 'ok' } };
+    });
+
+    await expect(client.listProjects(['1'])).rejects.toThrow('Forbidden');
   });
 
   it('should handle API errors', async () => {
