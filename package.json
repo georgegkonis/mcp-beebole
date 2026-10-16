@@ -29,7 +29,8 @@
     "dev": "tsc --watch",
     "preinspect": "npm run build",
     "inspect": "npx @modelcontextprotocol/inspector node build/index.js",
-    "package-extension": "./package-extension.sh"
+    "package-extension": "./package-extension.sh",
+    "prepare": "npm run build"
   },
   "release": {
     "branches": [
@@ -90,5 +91,13 @@
     "typescript": "^6.0.2",
     "typescript-eslint": "^8.58.1",
     "vitest": "^4.1.3"
-  }
+  },
+  "bin": {
+    "mcp-beebole": "build/index.js"
+  },
+  "files": [
+    "build/*.js",
+    "README.md",
+    "LICENSE"
+  ]
 }
