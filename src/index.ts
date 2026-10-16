@@ -93,7 +93,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const companies = await beebole.listCompanies();
       const projects = await beebole.listProjects(companies.map(c => c.id));
       const subprojects = await beebole.listSubprojects(projects.map(p => p.id));
-      const tasks = await beebole.listTasks();
+      const tasks = await beebole.listTasks(companies.map(c => c.id));
       
       const resultLines: string[] = ["### Hierarchical View of Projects and Tasks\n"];
       

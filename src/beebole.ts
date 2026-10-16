@@ -80,9 +80,15 @@ export class BeeboleClient {
     return allSubprojects.filter(s => s.active !== false);
   }
 
-  async listTasks(): Promise<any[]> {
-    const data = await this.callService<any>("task.list");
-    return this.normalize(data.tasks || data.results || []).filter(t => t.active !== false);
+  async listTasks(companyIds?: string[]): Promise<any[]> {
+    let allTasks: any[] = [];
+    if (companyIds && companyIds.length > 0) {
+      for (const id of companyIds) {
+        const data = await this.callService<any>("task.list", { company: { id: Number(id) } });
+        allTasks.push(...this.normalize(data.tasks || data.results || []).map(t => ({ ...t, companyId: t.companyId ?? id })));
+      }
+    }
+    return allTasks.filter(t => t.active !== false);
   }
 
   async listAbsenceTypes(companyIds?: string[]): Promise<any[]> {
